@@ -1,0 +1,39 @@
+[package]
+name = "egui_moon_code_ide"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "An egui code editor with go-to-definition and autocomplete: the glue between egui_moon_editor and a language server client"
+authors = ["Antoine M-P"]
+license = "MIT"
+repository = "https://github.com/antoineMoPa/egui_moon_code_ide"
+documentation = "https://docs.rs/egui_moon_code_ide"
+readme = "README.md"
+keywords = ["egui", "editor", "lsp", "completion", "code"]
+categories = ["gui", "text-editors", "development-tools"]
+exclude = [".github/"]
+
+# Published on its own, like the two crates it joins: this is the seam between a widget and a
+# language server client, not part of whatever application vendors it.
+[workspace]
+
+[dependencies]
+anyhow = "1"
+egui = "0.36"
+# The widget: the buffer, the fringe, the completion list it is handed, and the word under a
+# modifier-click. It knows nothing about language servers, and that stays true.
+egui_moon_editor = { version = "0.1", path = "../egui_moon_editor" }
+# The client: processes, framing, position arithmetic, a server per workspace. It knows
+# nothing about editors, and that stays true too.
+moon_lsp = { version = "0.1", path = "../moon_lsp" }
+
+[dev-dependencies]
+# The example opens a real window on a real file against a real language server - see
+# `examples/edit.rs`, which is the proof this crate stands up without an application around it.
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+
+[[example]]
+name = "edit"
+
+[lints.rust]
+missing_docs = "warn"
