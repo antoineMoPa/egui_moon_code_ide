@@ -14,8 +14,9 @@ use egui_moon_editor::{Editor, EditorOutput, EditorRequest, EditorStyle, Languag
 
 use crate::{
     asking::{Ask, Asking, Heard, StatusAbout},
+    calling::follows_the_caret,
     completing::{Completing, CompletingNext},
-    definition::{AsksAbout, asks_about, still_starting},
+    definition::{asks_about, still_starting},
     document::{DocumentAsk, Served},
     source::{LanguageSource, LspLocation, LspPosition, LspStatus},
 };
@@ -31,13 +32,25 @@ pub enum Definition {
         /// Everywhere the server says it is defined.
         places: Vec<LspLocation>,
     },
-    /// The server is still reading the project, so it was not asked: it would answer with
-    /// nothing, which reads as the name being defined nowhere. The string is the sentence to
-    /// show - see [`still_starting`](crate::still_starting).
+    /// The server was asked while it was still reading the project and answered with
+    /// nothing, which from such a server is the wait rather than an answer. The string is the
+    /// sentence to show - see [`still_starting`](crate::still_starting).
     StillStarting(String),
-    /// Nothing here serves this file, so the click is the caller's to answer - a repo search,
-    /// a tags file, or a shrug.
+    /// Nothing here serves this file, so there was nobody to ask. The caller says so however
+    /// it says such things.
     NoServer(Word),
+}
+
+/// A modifier-click whose question is still out.
+struct LookingUp {
+    /// The name that was clicked. A second click replaces this one, so the first one's answer
+    /// is thrown away when it lands - the person has moved on, and landing them on the older
+    /// of the two names would be wrong.
+    word: Word,
+    /// Whether the server had not finished reading the project when it was asked. It was
+    /// asked anyway, because the wait is far too long to sit a click out; what has to be
+    /// remembered until the answer lands is how an empty one is allowed to read.
+    asked_while_starting: bool,
 }
 
 /// What drawing a [`CodeEditor`] turned up.
@@ -81,10 +94,8 @@ pub struct CodeEditor {
     served: Served,
     /// What is on offer under the caret, and what has been asked about it.
     completing: Completing,
-    /// The name a modifier-click asked about, while the question is out. A second click
-    /// replaces it, so the first one's answer is thrown away when it lands - the person has
-    /// moved on, and landing them on the older of the two names would be wrong.
-    looking_up: Option<Word>,
+    /// The modifier-click whose question is out, if one is.
+    looking_up: Option<LookingUp>,
     /// An answer that came back this frame, waiting to go out in the output.
     landed: Option<Definition>,
 }
@@ -232,15 +243,27 @@ impl CodeEditor {
                 Heard::Definition { word, places } => {
                     // A second click while this one was out. The person has moved on, and
                     // landing them on the older of the two names would be wrong.
-                    if self.looking_up.as_ref() == Some(&word) {
-                        self.looking_up = None;
-                        self.landed = Some(Definition::Places {
-                            word,
-                            places: places.unwrap_or_default(),
-                        });
-                    }
+                    let Some(asking) = self
+                        .looking_up
+                        .take_if(|asking| asking.word == word)
+                    else {
+                        continue;
+                    };
+                    let places = places.unwrap_or_default();
+                    // Nothing from a server that had not read the project yet is the wait
+                    // showing through, not an answer about the name.
+                    self.landed = Some(match places.is_empty() && asking.asked_while_starting {
+                        true => Definition::StillStarting(still_starting(&self.file_path)),
+                        false => Definition::Places { word, places },
+                    });
                 }
-                Heard::Completion { asked, rows } => self.completing.answered(&asked, rows),
+                Heard::Completion { asked, rows } => {
+                    // What the caret sits in front of, off the buffer as it stands: it is what
+                    // keeps a call being completed over from being given a second pair of
+                    // parentheses. See [`calling::follows_the_caret`].
+                    let follows = follows_the_caret(self.editor.text(), asked.at());
+                    self.completing.answered(&asked, rows, follows);
+                }
             }
         }
     }
@@ -261,21 +284,27 @@ impl CodeEditor {
         });
     }
 
-    /// A name was modifier-clicked. Ask the server where it is defined, or say why not.
+    /// A name was modifier-clicked. Ask the server where it is defined, or say there is
+    /// nobody to ask.
+    ///
+    /// A server that has not finished reading the project is asked too - see
+    /// [`AsksAbout`](crate::AsksAbout). Whether it had is remembered rather than acted on here, because it only
+    /// matters if the answer comes back empty, and that is frames away.
     fn look_up(&mut self, word: Word) -> Option<Definition> {
-        match asks_about(self.served.status()) {
-            AsksAbout::Server => {
-                let at = LspPosition {
-                    line: word.at.line,
-                    column: word.at.column,
-                };
-                self.looking_up = Some(word.clone());
-                self.asking.ask(Ask::Definition { word, at });
-                None
-            }
-            AsksAbout::Wait => Some(Definition::StillStarting(still_starting(&self.file_path))),
-            AsksAbout::Elsewhere => Some(Definition::NoServer(word)),
+        let asks = asks_about(self.served.status());
+        if !asks.asks() {
+            return Some(Definition::NoServer(word));
         }
+        let at = LspPosition {
+            line: word.at.line,
+            column: word.at.column,
+        };
+        self.looking_up = Some(LookingUp {
+            word: word.clone(),
+            asked_while_starting: asks.an_empty_answer_is_only_the_wait(),
+        });
+        self.asking.ask(Ask::Definition { word, at });
+        None
     }
 
     /// Ask what could finish the word being typed, when it is worth asking.

@@ -29,6 +29,7 @@ use std::time::Instant;
 use egui_moon_editor::{Completion, EditorOutput};
 
 use crate::{
+    calling,
     document::{CanAnswer, TYPING_SETTLES_IN},
     source::{LspCompletion, LspPosition},
 };
@@ -188,7 +189,19 @@ impl Completing {
     /// `answered` is `None` for a server that could not answer, which offers nothing and says
     /// nothing about it: a completion list is an offer, and an offer that did not come is not
     /// a fault.
-    pub fn answered(&mut self, asked: &Asked, answered: Option<Vec<LspCompletion>>) {
+    ///
+    /// `follows_the_caret` is the character the caret sits in front of - see
+    /// [`calling::follows_the_caret`], which is what reads it off the buffer. It is what stops
+    /// a call being completed over from being given a second pair of parentheses, and it is
+    /// taken here rather than at the frame the row is taken because this is where the rows are
+    /// made, and a row is only ever offered while the place it was asked about is still the
+    /// place being typed.
+    pub fn answered(
+        &mut self,
+        asked: &Asked,
+        answered: Option<Vec<LspCompletion>>,
+        follows_the_caret: Option<char>,
+    ) {
         if self.asked.as_ref() == Some(asked) {
             self.asked = None;
         }
@@ -197,7 +210,8 @@ impl Completing {
         if self.typing.as_ref() != Some(asked) {
             return;
         }
-        let rows = answered.map_or_else(Vec::new, |rows| rows_for(&asked.word, rows));
+        let rows = answered
+            .map_or_else(Vec::new, |rows| rows_for(&asked.word, rows, follows_the_caret));
         if rows.is_empty() {
             // Asked and answered with nothing. Nothing is gained by asking again about the
             // same word every time the typing stops.
@@ -289,21 +303,22 @@ enum Next {
 
 /// The rows a server's answer comes to, as the editor takes them.
 ///
-/// The three fields are the same three on purpose, so the mapping is a mapping. What is a
-/// decision is which rows survive it: the protocol leaves the filtering to whoever asked, and
-/// a server handed a position answers with everything that could stand there, most of which
-/// does not begin with what has been typed. Offering those would put a row nobody typed
-/// towards at the top of the list, where Enter takes it.
-fn rows_for(word: &str, answered: Vec<LspCompletion>) -> Vec<Completion> {
+/// Two decisions, and both of them are here because this is where a server's answer stops being
+/// the protocol's and becomes something a person reads. Which rows survive: the protocol leaves
+/// the filtering to whoever asked, and a server handed a position answers with everything that
+/// could stand there, most of which does not begin with what has been typed. Offering those
+/// would put a row nobody typed towards at the top of the list, where Enter takes it. And what
+/// each row puts in, which for a function is a call - see [`calling::row_for`].
+fn rows_for(
+    word: &str,
+    answered: Vec<LspCompletion>,
+    follows_the_caret: Option<char>,
+) -> Vec<Completion> {
     answered
         .into_iter()
         .filter(|row| starts_the_same(&row.label, word))
         .take(MOST_ROWS)
-        .map(|row| Completion {
-            label: row.label,
-            detail: row.detail,
-            insert: row.insert,
-        })
+        .map(|row| calling::row_for(row, follows_the_caret))
         .collect()
 }
 
@@ -335,6 +350,7 @@ mod tests {
                 label: label.to_string(),
                 detail: None,
                 insert: label.to_string(),
+                kind: None,
             })
             .collect()
     }
@@ -414,7 +430,7 @@ mod tests {
 
         // Two more letters went in while the question was out.
         completing.saw(Some(&asked("greet")), now);
-        completing.answered(&asked("gre"), Some(offered(&["greet", "greeting"])));
+        completing.answered(&asked("gre"), Some(offered(&["greet", "greeting"])), None);
         assert!(completing.on_offer().is_empty());
         // And the view is free to ask about the word that is really being typed.
         assert!(completing.asked.is_none());
@@ -425,7 +441,7 @@ mod tests {
 
         // The answer to that one lands while it is still the word being typed, and is shown.
         completing.asked = Some(asked("greet"));
-        completing.answered(&asked("greet"), Some(offered(&["greet", "greeting"])));
+        completing.answered(&asked("greet"), Some(offered(&["greet", "greeting"])), None);
         assert_eq!(completing.on_offer().len(), 2);
     }
 
@@ -456,7 +472,7 @@ mod tests {
         let mut completing = Completing::default();
         completing.saw(Some(&asked("greet")), now);
         completing.asked = Some(asked("greet"));
-        completing.answered(&asked("greet"), Some(Vec::new()));
+        completing.answered(&asked("greet"), Some(Vec::new()), None);
 
         assert!(completing.on_offer().is_empty());
         assert_eq!(
@@ -469,13 +485,17 @@ mod tests {
     /// what has been typed are offered, and never more than a screenful of lists.
     #[test]
     fn only_the_rows_that_could_finish_the_word_are_offered() {
-        let rows = rows_for("str", offered(&["String", "str", "as_ref", "Struct", "u32"]));
+        let rows = rows_for(
+            "str",
+            offered(&["String", "str", "as_ref", "Struct", "u32"]),
+            None,
+        );
         let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
         assert_eq!(labels, ["String", "str", "Struct"]);
 
         let many: Vec<String> = (0..200).map(|number| format!("greet{number}")).collect();
         let many: Vec<&str> = many.iter().map(String::as_str).collect();
-        assert_eq!(rows_for("greet", offered(&many)).len(), MOST_ROWS);
+        assert_eq!(rows_for("greet", offered(&many), None).len(), MOST_ROWS);
     }
 
     /// The detail and the text to insert are the server's, carried through untouched: the
@@ -488,11 +508,71 @@ mod tests {
                 label: "greet".to_string(),
                 detail: Some("fn(&str) -> String".to_string()),
                 insert: "greet(${1:name})".to_string(),
+                kind: None,
             }],
+            None,
         );
 
         assert_eq!(rows[0].label, "greet");
         assert_eq!(rows[0].detail.as_deref(), Some("fn(&str) -> String"));
         assert_eq!(rows[0].insert, "greet(${1:name})");
+    }
+
+    /// A function offered by the server is a call by the time the editor has it, and the row
+    /// beside it is not - which is [`calling`]'s decision, taken on every row of every answer
+    /// as it is turned into a list.
+    #[test]
+    fn a_function_in_an_answer_is_offered_as_a_call_and_the_variable_beside_it_is_not() {
+        let now = Instant::now();
+        let mut completing = Completing::default();
+        completing.saw(Some(&asked("gre")), now);
+        completing.asked = Some(asked("gre"));
+        completing.answered(
+            &asked("gre"),
+            Some(vec![
+                LspCompletion {
+                    label: "greet".to_string(),
+                    detail: None,
+                    insert: "greet".to_string(),
+                    kind: Some(crate::source::LspCompletionKind::Function),
+                },
+                LspCompletion {
+                    label: "greeting".to_string(),
+                    detail: None,
+                    insert: "greeting".to_string(),
+                    kind: Some(crate::source::LspCompletionKind::Variable),
+                },
+            ]),
+            None,
+        );
+
+        let rows = completing.on_offer();
+        assert_eq!(rows[0].insert, "greet()");
+        assert_eq!(rows[0].caret_back, 1);
+        assert_eq!(rows[1].insert, "greeting");
+        assert_eq!(rows[1].caret_back, 0);
+    }
+
+    /// The same answer where the caret already sits in front of a parenthesis - `gre|(x)`,
+    /// completing over a call that is already written. A second pair would leave `greet()(x)`.
+    #[test]
+    fn a_function_completed_over_an_existing_call_is_offered_without_a_second_pair() {
+        let now = Instant::now();
+        let mut completing = Completing::default();
+        completing.saw(Some(&asked("gre")), now);
+        completing.asked = Some(asked("gre"));
+        completing.answered(
+            &asked("gre"),
+            Some(vec![LspCompletion {
+                label: "greet".to_string(),
+                detail: None,
+                insert: "greet".to_string(),
+                kind: Some(crate::source::LspCompletionKind::Function),
+            }]),
+            Some('('),
+        );
+
+        assert_eq!(completing.on_offer()[0].insert, "greet");
+        assert_eq!(completing.on_offer()[0].caret_back, 0);
     }
 }

@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 
-pub use moon_lsp::{LspCompletion, LspLocation, LspPosition, LspStatus};
+pub use moon_lsp::{LspCompletion, LspCompletionKind, LspLocation, LspPosition, LspStatus};
 
 /// Somewhere that answers language questions about the files being edited.
 ///

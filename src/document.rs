@@ -44,6 +44,33 @@ pub const TYPING_SETTLES_IN: Duration = Duration::from_millis(400);
 /// moment the answer is yes - a server that has finished starting does not un-finish.
 const STARTING_IS_ASKED_ABOUT_EVERY: Duration = Duration::from_secs(1);
 
+/// How long a file leaves its server alone after a call to it failed - one entry per failure
+/// in a row, and the last of them is the wait from there on.
+///
+/// A `didOpen` or `didChange` that fails is usually momentary where it matters most: on a
+/// review of a repo on another machine every call is a network round trip, and a link that
+/// drops for a second or a repo-side process that is restarting must not cost that tab its
+/// completions and its ⌘-click for the rest of the session. So the file offers its text again,
+/// on a widening wait: the other reason a call fails is that the far end is properly down, and
+/// a try a frame at that moment is a flood aimed at something already struggling.
+///
+/// A table rather than arithmetic, so the waits read as the seconds they are: a blink for the
+/// blip that is over by the next frame, a pause for a process coming back up, and then once
+/// every half minute for as long as the file stays open.
+const TRIES_AGAIN_AFTER: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(5),
+    Duration::from_secs(30),
+];
+
+/// The wait after `failures` failed calls in a row. Contract: never asked about none - a
+/// document with nothing wrong with it waits for nothing.
+fn tries_again_after(failures: usize) -> Duration {
+    assert!(failures > 0, "a wait is only ever asked for after a failure");
+    let last = TRIES_AGAIN_AFTER.len() - 1;
+    TRIES_AGAIN_AFTER[(failures - 1).min(last)]
+}
+
 /// Whether a language server is behind a file, and what it has heard.
 #[derive(Default)]
 pub enum Served {
@@ -105,6 +132,13 @@ pub struct Document {
     /// again now and then.
     asking_about_starting: bool,
     asked_about_starting_at: Instant,
+    /// How many calls to the server have failed in a row, and when the last of them did.
+    /// Zero is the ordinary state - nothing has gone wrong and nothing is being waited out;
+    /// anything else is how far into [`TRIES_AGAIN_AFTER`] the current wait is taken from. A
+    /// call that goes through puts it back to zero, which is the whole of the recovery: the
+    /// text is offered again as the ordinary open or change it always was.
+    failures: usize,
+    failed_at: Instant,
 }
 
 /// What the server is owed about a document right now.
@@ -127,7 +161,34 @@ impl Document {
             ready,
             asking_about_starting: false,
             asked_about_starting_at: now,
+            failures: 0,
+            failed_at: now,
         }
+    }
+
+    /// How much is left of the wait after a failed call, or nothing when there is no failure
+    /// to wait out and the server can be spoken to as usual.
+    fn waiting_out_a_failure(&self, now: Instant) -> Option<Duration> {
+        if self.failures == 0 {
+            return None;
+        }
+        let waits = tries_again_after(self.failures);
+        let waited = now.duration_since(self.failed_at);
+        (waited < waits).then(|| waits - waited)
+    }
+
+    /// How long until the frame whatever is waiting becomes worth doing on: a change held
+    /// back for the typing to settle, or the text held back after a call that failed. A
+    /// window nobody is typing in draws no further frames of its own, so anything waiting on
+    /// a clock has to ask for the frame it happens on.
+    fn draw_again_in(&self, text: &str, now: Instant) -> Option<Duration> {
+        if self.sending {
+            return None;
+        }
+        if let Some(left) = self.waiting_out_a_failure(now) {
+            return Some(left);
+        }
+        (!self.opened || self.sent != text).then_some(TYPING_SETTLES_IN)
     }
 
     /// Whether it is time to ask again whether the server has finished starting. Never once
@@ -153,6 +214,10 @@ impl Document {
     /// typing to stop.
     fn owed(&self, text: &str, now: Instant) -> Owed {
         if self.sending {
+            return Owed::Nothing;
+        }
+        // A call that failed is tried again, but not before its wait has run out.
+        if self.waiting_out_a_failure(now).is_some() {
             return Owed::Nothing;
         }
         if !self.opened {
@@ -268,8 +333,9 @@ impl Served {
                 document.saw(text, now);
                 match document.owed(text, now) {
                     Owed::Nothing => {
-                        // A change waiting on the typing to stop needs a frame to be sent on.
-                        let waiting = !document.sending && document.sent != text;
+                        // The text waiting on a clock - the typing to stop, or a failed call
+                        // to be worth trying again - needs a frame to go on.
+                        let draw_again_in = document.draw_again_in(text, now);
                         // Asked only when there is nothing to send, so a change never waits a
                         // frame behind a question about the waiting.
                         let ask = document.wants_the_status_again(now).then(|| {
@@ -277,10 +343,7 @@ impl Served {
                             document.asked_about_starting_at = now;
                             DocumentAsk::WhetherStillStarting
                         });
-                        DocumentOwed {
-                            ask,
-                            draw_again_in: waiting.then_some(TYPING_SETTLES_IN),
-                        }
+                        DocumentOwed { ask, draw_again_in }
                     }
                     owed => {
                         document.sending = true;
@@ -334,6 +397,10 @@ impl Served {
     }
 
     /// The server heard the text that was sent to it.
+    ///
+    /// This is also what puts a run of failures behind the file: a call that went through is
+    /// the proof that whatever was wrong is over, so the next change is sent on the ordinary
+    /// pause rather than on a wait meant for something that is down.
     pub fn heard(&mut self, sent: String) {
         let Served::Yes(document) = self else {
             return;
@@ -341,14 +408,32 @@ impl Served {
         document.sending = false;
         document.opened = true;
         document.sent = sent;
+        document.failures = 0;
     }
 
-    /// The server could not be told, so this view stops talking to it.
+    /// The server could not be told, so the file leaves it alone for a moment and then offers
+    /// the text again.
     ///
-    /// Trying again every frame would be a call a frame at the exact moment something is
-    /// already wrong, and go-to-definition has whatever the caller falls back on either way.
+    /// Not the end of the file's server. A failed call is momentary as often as not - most of
+    /// all on a `--remote` review, where every call is a network round trip and a link that
+    /// blinks would otherwise cost that tab its completions and its ⌘-click until it was
+    /// closed and opened again, with nothing to say why.
+    ///
+    /// There is no retry of its own: what tries again is the ordinary open or change
+    /// [`Served::owed`] hands out once the wait has run, and what ends it is that call being
+    /// heard. What keeps a server or a link that is properly down from being hammered is that
+    /// the wait widens with every failure in a row - see [`TRIES_AGAIN_AFTER`].
+    ///
+    /// A file nothing serves never comes through here at all: that is answered once, by
+    /// [`Served::served_answered`], and settles into [`Served::No`] without a call ever being
+    /// made - which is what keeps the markdown and the configuration of a repo silent.
     pub fn could_not_be_told(&mut self) {
-        *self = Served::No;
+        let Served::Yes(document) = self else {
+            return;
+        };
+        document.sending = false;
+        document.failures += 1;
+        document.failed_at = Instant::now();
     }
 }
 
@@ -473,6 +558,91 @@ mod tests {
         served.starting_answered(LspStatus::Ready);
         assert_eq!(served.can_answer_about("fn one() {}"), CanAnswer::Yes);
         assert_eq!(served.status(), LspStatus::Ready);
+    }
+
+    /// A call that failed is not the end of the file's server: the text is offered again once
+    /// the wait has run out, and a call that goes through leaves nothing behind.
+    #[test]
+    fn a_file_whose_open_failed_offers_its_text_again_once_the_wait_has_run() {
+        let now = Instant::now();
+        let mut served = Served::default();
+        served.owed("fn one() {}", now);
+        served.served_answered(LspStatus::Ready);
+        assert!(matches!(
+            served.owed("fn one() {}", now).ask,
+            Some(DocumentAsk::Send { opening: true, .. })
+        ));
+
+        // The open did not land. The file still has its server, and says nothing to it while
+        // the first wait runs.
+        served.could_not_be_told();
+        // The failure is stamped as it happens rather than with the frame's clock, so the
+        // wait is measured from a moment no earlier than that stamp.
+        let failed_at = Instant::now();
+        assert!(served.has_a_server());
+        assert!(!served.nothing_serves_it());
+        let waiting = served.owed("fn one() {}", now);
+        assert_eq!(waiting.ask, None);
+        assert!(waiting.draw_again_in.is_some_and(|left| left <= TRIES_AGAIN_AFTER[0]));
+
+        // And once it has, the open goes again of its own accord - and lands.
+        let tried_again = served.owed("fn one() {}", failed_at + TRIES_AGAIN_AFTER[0]);
+        assert_eq!(
+            tried_again.ask,
+            Some(DocumentAsk::Send {
+                text: "fn one() {}".to_string(),
+                opening: true
+            })
+        );
+        served.heard("fn one() {}".to_string());
+        assert_eq!(served.can_answer_about("fn one() {}"), CanAnswer::Yes);
+
+        // Nothing of the failure is left: the next change waits on the typing, not on a wait
+        // meant for a server that is down.
+        let typed = "fn one() {} // typed";
+        served.owed(typed, now);
+        assert_eq!(
+            served.owed(typed, now + TYPING_SETTLES_IN).ask,
+            Some(DocumentAsk::Send {
+                text: typed.to_string(),
+                opening: false
+            })
+        );
+    }
+
+    /// The waits after each failure in a row, read off the table: a link that is properly
+    /// down is spoken to less and less often rather than once a frame.
+    #[test]
+    fn the_wait_after_a_failed_call_widens_with_every_failure_in_a_row() {
+        let waits: Vec<Duration> = (1..=TRIES_AGAIN_AFTER.len() + 2)
+            .map(tries_again_after)
+            .collect();
+        let last = *TRIES_AGAIN_AFTER.last().expect("the table is not empty");
+        assert_eq!(
+            waits,
+            [
+                TRIES_AGAIN_AFTER[0],
+                TRIES_AGAIN_AFTER[1],
+                TRIES_AGAIN_AFTER[2],
+                last,
+                last
+            ]
+        );
+
+        // Two failures in a row, and the second wait is the longer one: the text is still not
+        // offered at the moment the first wait would have been over.
+        let now = Instant::now();
+        let mut document = Document::new(true);
+        document.failures = 2;
+        document.failed_at = now;
+        assert_eq!(
+            document.owed("fn one() {}", now + TRIES_AGAIN_AFTER[0]),
+            Owed::Nothing
+        );
+        assert_eq!(
+            document.owed("fn one() {}", now + TRIES_AGAIN_AFTER[1]),
+            Owed::Open
+        );
     }
 
     /// A window nobody is typing in draws no more frames, so the change waiting on the pause

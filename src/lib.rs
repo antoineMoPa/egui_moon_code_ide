@@ -80,6 +80,7 @@
 //!
 //! [`source`] is the trait, [`registry`] the local answer to it, [`document`] what a server
 //! is owed about an open file, [`completing`] when a half-typed word is worth a question,
+//! [`calling`] why taking a function from the list writes the parentheses of a call,
 //! [`definition`] what a click can expect of a server, [`asking`] the thread the questions go
 //! on, and [`editor`] the whole of it wired together.
 
@@ -87,6 +88,7 @@
 #![warn(missing_docs, clippy::doc_markdown)]
 
 pub mod asking;
+pub mod calling;
 pub mod completing;
 pub mod definition;
 pub mod document;
@@ -95,12 +97,15 @@ pub mod registry;
 pub mod source;
 
 pub use asking::{Ask, Asking, Heard, StatusAbout};
+pub use calling::{follows_the_caret, row_for, takes_parentheses};
 pub use completing::{Asked, Completing, CompletingNext};
 pub use definition::{AsksAbout, asks_about, still_starting};
 pub use document::{CanAnswer, Document, DocumentAsk, DocumentOwed, Served, TYPING_SETTLES_IN};
 pub use editor::{CodeEditor, CodeEditorOutput, Definition};
 pub use registry::RegistrySource;
-pub use source::{LanguageSource, LspCompletion, LspLocation, LspPosition, LspStatus};
+pub use source::{
+    LanguageSource, LspCompletion, LspCompletionKind, LspLocation, LspPosition, LspStatus,
+};
 
 #[cfg(test)]
 mod tests;
