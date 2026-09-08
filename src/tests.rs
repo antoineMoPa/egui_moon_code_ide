@@ -616,7 +616,9 @@ fn the_document_is_kept_up_until(
                 } => served.starting_answered(status),
                 Heard::Told { text, heard: true } => served.heard(text),
                 Heard::Told { heard: false, .. } => served.could_not_be_told(),
-                Heard::Definition { .. } | Heard::Completion { .. } => {}
+                Heard::Definition { .. }
+                | Heard::Completion { .. }
+                | Heard::Triggers(_) => {}
             }
         }
         std::thread::sleep(Duration::from_millis(5));

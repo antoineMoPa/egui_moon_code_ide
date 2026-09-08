@@ -15,7 +15,7 @@ use egui_moon_editor::{Editor, EditorOutput, EditorRequest, EditorStyle, Languag
 use crate::{
     asking::{Ask, Asking, Heard, StatusAbout},
     calling::follows_the_caret,
-    completing::{Completing, CompletingNext},
+    completing::{AtTheCaret, Completing, CompletingNext, before_the_caret},
     definition::{asks_about, still_starting},
     document::{DocumentAsk, Served},
     source::{LanguageSource, LspLocation, LspPosition, LspStatus},
@@ -94,6 +94,14 @@ pub struct CodeEditor {
     served: Served,
     /// What is on offer under the caret, and what has been asked about it.
     completing: Completing,
+    /// The characters the server behind this file said open a list on their own, once it has
+    /// been asked. Empty until then and empty for a server that named none, which in both
+    /// cases means only a word being typed is asked about.
+    triggers: Vec<char>,
+    /// Whether that question has been put. Once, per file: the answer is the server's and it
+    /// does not change while the server runs, so asking again every frame would be a call a
+    /// frame for an answer that is already in hand.
+    asked_what_opens_a_list: bool,
     /// The modifier-click whose question is out, if one is.
     looking_up: Option<LookingUp>,
     /// An answer that came back this frame, waiting to go out in the output.
@@ -125,6 +133,8 @@ impl CodeEditor {
             file_path,
             served: Served::default(),
             completing: Completing::default(),
+            triggers: Vec::new(),
+            asked_what_opens_a_list: false,
             looking_up: None,
             landed: None,
         }
@@ -158,6 +168,10 @@ impl CodeEditor {
         self.completing = Completing::default();
         self.looking_up = None;
         self.landed = None;
+        // The file may be another language, and another language is another server with
+        // another list of what opens one.
+        self.triggers = Vec::new();
+        self.asked_what_opens_a_list = false;
     }
 
     /// The widget, for everything a plain editor does.
@@ -257,6 +271,7 @@ impl CodeEditor {
                         false => Definition::Places { word, places },
                     });
                 }
+                Heard::Triggers(characters) => self.triggers = characters,
                 Heard::Completion { asked, rows } => {
                     // What the caret sits in front of, off the buffer as it stands: it is what
                     // keeps a call being completed over from being given a second pair of
@@ -307,17 +322,51 @@ impl CodeEditor {
         None
     }
 
-    /// Ask what could finish the word being typed, when it is worth asking.
+    /// Ask what could be typed where the caret is, when it is worth asking.
     fn follow_the_caret(&mut self, ctx: &egui::Context, output: &EditorOutput, now: Instant) {
         // A file nothing serves never asks anything, and this is the whole of what it costs.
         if !self.served.has_a_server() {
             return;
         }
+        self.ask_what_opens_a_list();
         let can_answer = self.served.can_answer_about(self.editor.text());
-        match self.completing.follow(output, can_answer, now) {
+        // What the caret sits behind, off the buffer as it stands: with the server's own
+        // list beside it, that is what says whether a `.` just typed is worth a question of
+        // its own. See [`AtTheCaret`].
+        let at_the_caret = AtTheCaret {
+            typed: output
+                .caret
+                .as_ref()
+                .and_then(|caret| {
+                    before_the_caret(
+                        self.editor.text(),
+                        LspPosition {
+                            line: caret.line,
+                            column: caret.column,
+                        },
+                    )
+                }),
+            triggers: &self.triggers,
+        };
+        match self.completing.follow(output, at_the_caret, can_answer, now) {
             CompletingNext::Nothing => {}
             CompletingNext::Wait => ctx.request_repaint_after(crate::TYPING_SETTLES_IN),
             CompletingNext::Ask(asked) => self.asking.ask(Ask::Completion(asked)),
         }
+    }
+
+    /// Ask the server what opens a completion list on its own, once there is a server up to
+    /// have said it.
+    ///
+    /// Waited for rather than asked at once, because the answer comes out of the
+    /// `initialize` reply and a server that has not started has not sent one - asking early
+    /// would fill this in with the empty list of a server that had simply not spoken yet, and
+    /// nothing would ever ask again.
+    fn ask_what_opens_a_list(&mut self) {
+        if self.asked_what_opens_a_list || self.served.status() != LspStatus::Ready {
+            return;
+        }
+        self.asked_what_opens_a_list = true;
+        self.asking.ask(Ask::Triggers);
     }
 }

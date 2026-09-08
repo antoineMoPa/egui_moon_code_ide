@@ -1,4 +1,4 @@
-//! The thread the six questions are actually put on.
+//! The thread the seven questions are actually put on.
 //!
 //! Every call on a [`LanguageSource`] blocks - milliseconds against a warm server, tens of
 //! seconds against a cold one, and a network round trip on top where the repo is somewhere
@@ -64,6 +64,9 @@ pub enum Ask {
     },
     /// What could finish the word being typed.
     Completion(Asked),
+    /// What the server behind this file said opens a completion list on its own. Asked once,
+    /// as soon as there is a server up to have said it.
+    Triggers,
 }
 
 /// An answer, read off the worker on a later frame.
@@ -91,6 +94,8 @@ pub enum Heard {
         /// Everywhere the server says it is defined.
         places: Option<Vec<LspLocation>>,
     },
+    /// What opens a completion list on its own, as the server behind this file named them.
+    Triggers(Vec<char>),
     /// What could finish a word. `None` for a server that could not answer.
     Completion {
         /// The question this answers, to be handed back to
@@ -107,6 +112,7 @@ enum Kind {
     Document,
     Status,
     Definition,
+    Triggers,
     Completion,
 }
 
@@ -116,12 +122,14 @@ enum Kind {
 /// the state machines above. The document goes first: every other question is about a place
 /// in text the server has to have heard already, so sending it first is what makes the rest
 /// answerable at all. The status is next because it is what says whether asking is worth
-/// anything. Then the click, which somebody is waiting on, and last the completion, which is
-/// an offer nobody asked for out loud.
-const IN_ORDER: [Kind; 4] = [
+/// anything. Then the click, which somebody is waiting on. Then what opens a list on its own,
+/// which is asked once per server and is what says whether the last one is worth putting at
+/// all. And last the completion, which is an offer nobody asked for out loud.
+const IN_ORDER: [Kind; 5] = [
     Kind::Document,
     Kind::Status,
     Kind::Definition,
+    Kind::Triggers,
     Kind::Completion,
 ];
 
@@ -141,6 +149,7 @@ impl Ask {
             Ask::Send { .. } => Kind::Document,
             Ask::Definition { .. } => Kind::Definition,
             Ask::Completion(_) => Kind::Completion,
+            Ask::Triggers => Kind::Triggers,
         }
     }
 }
@@ -348,6 +357,7 @@ fn work(
                 rows: source.completion(file_path, asked.at()).ok(),
                 asked,
             },
+            Ask::Triggers => Heard::Triggers(source.trigger_characters(file_path)),
         };
         // A closed handle has dropped the receiver, and the answer belongs to nobody.
         if answers.send((about, heard)).is_err() {

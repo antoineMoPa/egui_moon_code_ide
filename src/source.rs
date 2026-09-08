@@ -1,4 +1,4 @@
-//! Where the answers about a file come from, as six questions and nothing else.
+//! Where the answers about a file come from, as seven questions and nothing else.
 //!
 //! This is the whole of what the rest of the crate needs of a language server, written down
 //! so that it can be answered by something other than a server running here.
@@ -12,7 +12,7 @@ pub use moon_lsp::{LspCompletion, LspCompletionKind, LspLocation, LspPosition, L
 /// It is a trait because the answers do not have to come from this process. A window
 /// reviewing a repo on another machine has no files to start a server on: the repo, and the
 /// servers reading it, are over there, and the window reaches them over HTTP - it sends the
-/// same six questions and reads the same answers back. An editor built on this crate cannot
+/// same seven questions and reads the same answers back. An editor built on this crate cannot
 /// tell the difference, and should not be able to: whether `definition` walked a hash map or
 /// crossed a continent, it is still "where is this name defined".
 ///
@@ -56,4 +56,25 @@ pub trait LanguageSource: Send + Sync {
 
     /// What could be typed at this place. Empty when the server offers nothing.
     fn completion(&self, file_path: &str, at: LspPosition) -> Result<Vec<LspCompletion>>;
+
+    /// The characters the server behind this file said open a completion list on their own:
+    /// the `.` of `thing.`, the `:` of a path, the `(` of a call.
+    ///
+    /// A question rather than a table because the answer is the server's and differs by
+    /// language - rust-analyzer names `.`, `:`, `'` and `(`, and typescript-language-server
+    /// names `.`, `"`, `'`, `/`, `@` and `<`. It is asked once a file's server is up, and
+    /// the answer holds for as long as it runs.
+    ///
+    /// Empty for a file nothing serves, for a server that has not started yet, and for one
+    /// that named none. All three come to the same thing above: nothing here opens a list on
+    /// its own, so only a word being typed is asked about.
+    ///
+    /// It has an answer of its own rather than being required of every implementation,
+    /// because a source that reaches its servers across a network has to carry the question
+    /// there before it can answer it, and one that has not been taught to is not broken - it
+    /// is a source that completes words and not trigger characters, which is what every
+    /// source did before this question existed.
+    fn trigger_characters(&self, _file_path: &str) -> Vec<char> {
+        Vec::new()
+    }
 }

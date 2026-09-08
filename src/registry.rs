@@ -80,4 +80,8 @@ impl LanguageSource for RegistrySource {
     fn completion(&self, file_path: &str, at: LspPosition) -> Result<Vec<LspCompletion>> {
         self.servers.completion(&self.repo(), file_path, at)
     }
+
+    fn trigger_characters(&self, file_path: &str) -> Vec<char> {
+        self.servers.trigger_characters(&self.key, file_path)
+    }
 }
