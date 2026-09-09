@@ -222,6 +222,7 @@ impl CodeEditor {
             marks: request.marks.clone(),
             line_of_interest: request.line_of_interest,
             focus: request.focus,
+            indent: request.indent,
         };
         let output = self.editor.ui(ui, style, &drawn);
 
