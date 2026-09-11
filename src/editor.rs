@@ -222,6 +222,7 @@ impl CodeEditor {
             focus: request.focus,
             indent: request.indent,
             underlines: request.underlines,
+            notes: request.notes,
         };
         let output = self.editor.ui(ui, style, &drawn);
 
