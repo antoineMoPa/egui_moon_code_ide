@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- `LanguageSource::code_actions` and `signature_help`, and `Signing`: when the call being typed
+  is worth asking about - the caret settled inside an unclosed `(`, on text the server has
+  heard - and which answer is still the one to show.
+
+- `LanguageSource::hover`, `diagnostics` and `did_save`, and `Hovering`: when resting the
+  pointer on a name is worth a question - once it has rested, only about text the server has
+  heard, and once per word.
+
+- `LanguageSource::places` and `LanguageSource::format`. `definition` is now `places` asked for
+  definitions, so a source implements the one and gets the other.
+
+- `LanguageSource` asks two more questions, `prepare_rename` and `rename`, and `RegistrySource`
+  answers them out of the registry. They are required rather than given a default: a source
+  that cannot rename would have to answer with nothing, which reads as a name used nowhere.
+
 ## 0.1.0
 
 First release. The seam between `egui_moon_editor` and `moon_lsp`: `LanguageSource` is the six

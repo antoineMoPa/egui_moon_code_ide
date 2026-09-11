@@ -216,13 +216,12 @@ impl CodeEditor {
 
         let drawn = EditorRequest {
             completions: self.completing.on_offer(),
-            navigate_modifier: request
-                .navigate_modifier
-                .or(Some(egui::Modifiers::COMMAND)),
+            navigate_modifier: request.navigate_modifier.or(Some(egui::Modifiers::COMMAND)),
             marks: request.marks.clone(),
             line_of_interest: request.line_of_interest,
             focus: request.focus,
             indent: request.indent,
+            underlines: request.underlines,
         };
         let output = self.editor.ui(ui, style, &drawn);
 
@@ -258,10 +257,7 @@ impl CodeEditor {
                 Heard::Definition { word, places } => {
                     // A second click while this one was out. The person has moved on, and
                     // landing them on the older of the two names would be wrong.
-                    let Some(asking) = self
-                        .looking_up
-                        .take_if(|asking| asking.word == word)
-                    else {
+                    let Some(asking) = self.looking_up.take_if(|asking| asking.word == word) else {
                         continue;
                     };
                     let places = places.unwrap_or_default();
@@ -335,21 +331,21 @@ impl CodeEditor {
         // list beside it, that is what says whether a `.` just typed is worth a question of
         // its own. See [`AtTheCaret`].
         let at_the_caret = AtTheCaret {
-            typed: output
-                .caret
-                .as_ref()
-                .and_then(|caret| {
-                    before_the_caret(
-                        self.editor.text(),
-                        LspPosition {
-                            line: caret.line,
-                            column: caret.column,
-                        },
-                    )
-                }),
+            typed: output.caret.as_ref().and_then(|caret| {
+                before_the_caret(
+                    self.editor.text(),
+                    LspPosition {
+                        line: caret.line,
+                        column: caret.column,
+                    },
+                )
+            }),
             triggers: &self.triggers,
         };
-        match self.completing.follow(output, at_the_caret, can_answer, now) {
+        match self
+            .completing
+            .follow(output, at_the_caret, can_answer, now)
+        {
             CompletingNext::Nothing => {}
             CompletingNext::Wait => ctx.request_repaint_after(crate::TYPING_SETTLES_IN),
             CompletingNext::Ask(asked) => self.asking.ask(Ask::Completion(asked)),

@@ -1,18 +1,24 @@
-//! Where the answers about a file come from, as seven questions and nothing else.
+//! Where the answers about a file come from, as a handful of questions and nothing else.
 //!
 //! This is the whole of what the rest of the crate needs of a language server, written down
 //! so that it can be answered by something other than a server running here.
 
 use anyhow::Result;
 
-pub use moon_lsp::{LspCompletion, LspCompletionKind, LspLocation, LspPosition, LspStatus};
+pub use moon_lsp::{
+    LspCodeAction, LspDiagnostic, LspFormatting, LspPlaces, LspSeverity, LspSignature,
+};
+
+pub use moon_lsp::{
+    LspCompletion, LspCompletionKind, LspFileEdit, LspLocation, LspPosition, LspStatus, LspTextEdit,
+};
 
 /// Somewhere that answers language questions about the files being edited.
 ///
 /// It is a trait because the answers do not have to come from this process. A window
 /// reviewing a repo on another machine has no files to start a server on: the repo, and the
 /// servers reading it, are over there, and the window reaches them over HTTP - it sends the
-/// same seven questions and reads the same answers back. An editor built on this crate cannot
+/// same questions and reads the same answers back. An editor built on this crate cannot
 /// tell the difference, and should not be able to: whether `definition` walked a hash map or
 /// crossed a continent, it is still "where is this name defined".
 ///
@@ -51,11 +57,60 @@ pub trait LanguageSource: Send + Sync {
     /// Tell the server this side is done with a file.
     fn did_close(&self, file_path: &str) -> Result<()>;
 
+    /// The places of one kind the server names for the name at this place - where it is
+    /// defined, where its type is, where it is implemented, or everywhere it is used. Empty
+    /// when the server has no answer.
+    fn places(
+        &self,
+        file_path: &str,
+        at: LspPosition,
+        which: LspPlaces,
+    ) -> Result<Vec<LspLocation>>;
+
     /// Where the name at this place is defined. Empty when the server has no answer.
-    fn definition(&self, file_path: &str, at: LspPosition) -> Result<Vec<LspLocation>>;
+    fn definition(&self, file_path: &str, at: LspPosition) -> Result<Vec<LspLocation>> {
+        self.places(file_path, at, LspPlaces::Definition)
+    }
 
     /// What could be typed at this place. Empty when the server offers nothing.
     fn completion(&self, file_path: &str, at: LspPosition) -> Result<Vec<LspCompletion>>;
+
+    /// What the name at this place is called, as the server would rename it: the text to
+    /// offer to be typed over. `None` when nothing at this place can be renamed - a keyword, a
+    /// string, a file nothing serves.
+    fn prepare_rename(&self, file_path: &str, at: LspPosition) -> Result<Option<String>>;
+
+    /// Everything calling the name at this place `new_name` would change, one entry per file,
+    /// every place in the editor's own units.
+    ///
+    /// Nothing is written. Which of those files are open in a buffer and which are only on
+    /// disk is the caller's to know, and so is what to do about each: an open buffer takes
+    /// the edit as typing would, where a file nobody has open can only be written.
+    fn rename(&self, file_path: &str, at: LspPosition, new_name: &str) -> Result<Vec<LspFileEdit>>;
+
+    /// The edits that format the whole of this file, indented the way `options` says. Empty
+    /// for a file already formatted; an error for one whose server does not format.
+    fn format(&self, file_path: &str, options: LspFormatting) -> Result<Vec<LspTextEdit>>;
+
+    /// What the server says about the name at this place - its type, its signature, its docs -
+    /// as markdown. `None` for nothing to say.
+    fn hover(&self, file_path: &str, at: LspPosition) -> Result<Option<String>>;
+
+    /// What the server last said is wrong with this file, every place counted against the text
+    /// it was last sent. A read of what the server already published, not a question.
+    fn diagnostics(&self, file_path: &str) -> Result<Vec<LspDiagnostic>>;
+
+    /// Tell the server this file was written to disk, which is what some servers check a
+    /// project on.
+    fn did_save(&self, file_path: &str) -> Result<()>;
+
+    /// What the server offers to do to the code at this place - fixes for what it found wrong
+    /// there, rewrites - each with everything it changes. Empty for nothing on offer.
+    fn code_actions(&self, file_path: &str, at: LspPosition) -> Result<Vec<LspCodeAction>>;
+
+    /// The signature of the call around this place, and which parameter it is at. `None` for
+    /// no call around it.
+    fn signature_help(&self, file_path: &str, at: LspPosition) -> Result<Option<LspSignature>>;
 
     /// The characters the server behind this file said open a completion list on their own:
     /// the `.` of `thing.`, the `:` of a path, the `(` of a call.

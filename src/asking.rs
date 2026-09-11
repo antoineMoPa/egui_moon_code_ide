@@ -1,4 +1,4 @@
-//! The thread the seven questions are actually put on.
+//! The thread the questions are actually put on.
 //!
 //! Every call on a [`LanguageSource`] blocks - milliseconds against a warm server, tens of
 //! seconds against a cold one, and a network round trip on top where the repo is somewhere

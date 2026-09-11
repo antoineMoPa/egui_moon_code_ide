@@ -47,11 +47,11 @@
 //!
 //! # The seam
 //!
-//! The answers do not have to come from this process. [`LanguageSource`] is the seven questions
+//! The answers do not have to come from this process. [`LanguageSource`] is the questions
 //! and nothing else, because a window reviewing a repo on another machine reaches its servers
 //! over HTTP - the repo is over there, and so is anything that could read it. An editor built
 //! on this crate cannot tell the difference, and should not be able to. [`RegistrySource`] is
-//! the local answer to those seven, so that the simple case is two lines rather than homework.
+//! the local answer to those, so that the simple case is two lines rather than homework.
 //!
 //! Everything above the trait is the caller's. Where a jump lands, what to do when there is
 //! no server - a repo search, a tags file, nothing - what a status bar says, and whether two
@@ -60,7 +60,7 @@
 //!
 //! # Threading
 //!
-//! Every one of the seven blocks, sometimes for tens of seconds, and an egui application must
+//! Every one of them blocks, sometimes for tens of seconds, and an egui application must
 //! never wait on a frame. So [`CodeEditor`] owns a worker thread - see [`Asking`] - puts its
 //! questions on it and reads the answers back on whatever later frame they land. Three things
 //! hold whatever else changes: `did_change` is debounced by [`TYPING_SETTLES_IN`] rather than
@@ -93,7 +93,9 @@ pub mod completing;
 pub mod definition;
 pub mod document;
 pub mod editor;
+pub mod hovering;
 pub mod registry;
+pub mod signing;
 pub mod source;
 
 pub use asking::{Ask, Asking, Heard, StatusAbout};
@@ -102,9 +104,13 @@ pub use completing::{Asked, AtTheCaret, Completing, CompletingNext, before_the_c
 pub use definition::{AsksAbout, asks_about, still_starting};
 pub use document::{CanAnswer, Document, DocumentAsk, DocumentOwed, Served, TYPING_SETTLES_IN};
 pub use editor::{CodeEditor, CodeEditorOutput, Definition};
+pub use hovering::{Hovering, HoveringNext, POINTER_SETTLES_IN};
 pub use registry::RegistrySource;
+pub use signing::{SIGNATURE_SETTLES_IN, SignedAt, Signing, SigningNext, inside_a_call};
 pub use source::{
-    LanguageSource, LspCompletion, LspCompletionKind, LspLocation, LspPosition, LspStatus,
+    LanguageSource, LspCodeAction, LspCompletion, LspCompletionKind, LspDiagnostic, LspFileEdit,
+    LspFormatting, LspLocation, LspPlaces, LspPosition, LspSeverity, LspSignature, LspStatus,
+    LspTextEdit,
 };
 
 #[cfg(test)]

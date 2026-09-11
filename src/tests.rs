@@ -55,6 +55,7 @@ impl FakeSource {
             vec![LspLocation {
                 file_path: "src/lib.rs".to_string(),
                 line_number: 12,
+                line_text: None,
             }],
         )
     }
@@ -160,9 +161,57 @@ impl LanguageSource for FakeSource {
         Ok(())
     }
 
-    fn definition(&self, file_path: &str, at: LspPosition) -> Result<Vec<LspLocation>> {
+    fn places(
+        &self,
+        file_path: &str,
+        at: LspPosition,
+        which: crate::LspPlaces,
+    ) -> Result<Vec<LspLocation>> {
+        // Written the way the tests read it back: every question here is about a definition.
+        assert_eq!(which, crate::LspPlaces::Definition);
         self.note(format!("definition {file_path} {}:{}", at.line, at.column));
         Ok(self.places.clone())
+    }
+
+    fn format(
+        &self,
+        file_path: &str,
+        _options: crate::LspFormatting,
+    ) -> Result<Vec<crate::LspTextEdit>> {
+        self.note(format!("format {file_path}"));
+        Ok(Vec::new())
+    }
+
+    fn hover(&self, file_path: &str, at: LspPosition) -> Result<Option<String>> {
+        self.note(format!("hover {file_path} {}:{}", at.line, at.column));
+        Ok(None)
+    }
+
+    fn diagnostics(&self, file_path: &str) -> Result<Vec<crate::LspDiagnostic>> {
+        self.note(format!("diagnostics {file_path}"));
+        Ok(Vec::new())
+    }
+
+    fn did_save(&self, file_path: &str) -> Result<()> {
+        self.note(format!("save {file_path}"));
+        Ok(())
+    }
+
+    fn code_actions(&self, file_path: &str, at: LspPosition) -> Result<Vec<crate::LspCodeAction>> {
+        self.note(format!(
+            "code actions {file_path} {}:{}",
+            at.line, at.column
+        ));
+        Ok(Vec::new())
+    }
+
+    fn signature_help(
+        &self,
+        file_path: &str,
+        at: LspPosition,
+    ) -> Result<Option<crate::LspSignature>> {
+        self.note(format!("signature {file_path} {}:{}", at.line, at.column));
+        Ok(None)
     }
 
     fn completion(&self, file_path: &str, at: LspPosition) -> Result<Vec<LspCompletion>> {
@@ -173,6 +222,27 @@ impl LanguageSource for FakeSource {
             insert: "greet".to_string(),
             kind: Some(LspCompletionKind::Function),
         }])
+    }
+
+    fn prepare_rename(&self, file_path: &str, at: LspPosition) -> Result<Option<String>> {
+        self.note(format!(
+            "prepare rename {file_path} {}:{}",
+            at.line, at.column
+        ));
+        Ok(None)
+    }
+
+    fn rename(
+        &self,
+        file_path: &str,
+        at: LspPosition,
+        new_name: &str,
+    ) -> Result<Vec<crate::LspFileEdit>> {
+        self.note(format!(
+            "rename {file_path} {}:{} to {new_name}",
+            at.line, at.column
+        ));
+        Ok(Vec::new())
     }
 }
 
@@ -194,9 +264,13 @@ fn next_answer(asking: &Asking) -> Heard {
 fn a_question_is_answered_on_the_worker_and_the_window_is_woken_when_it_lands() {
     let source = FakeSource::new();
     let (woken, was_woken) = mpsc::channel();
-    let asking = Asking::new("src/main.rs", Arc::clone(&source) as Arc<dyn LanguageSource>, move || {
-        let _ = woken.send(());
-    });
+    let asking = Asking::new(
+        "src/main.rs",
+        Arc::clone(&source) as Arc<dyn LanguageSource>,
+        move || {
+            let _ = woken.send(());
+        },
+    );
 
     asking.ask(Ask::Status(StatusAbout::WhetherServed));
     let heard = next_answer(&asking);
@@ -220,7 +294,11 @@ fn a_question_is_answered_on_the_worker_and_the_window_is_woken_when_it_lands() 
 fn a_question_still_waiting_to_go_out_is_replaced_by_the_one_that_supersedes_it() {
     let source = FakeSource::new();
     let release = source.holds_the_first_call();
-    let asking = Asking::new("src/main.rs", Arc::clone(&source) as Arc<dyn LanguageSource>, || {});
+    let asking = Asking::new(
+        "src/main.rs",
+        Arc::clone(&source) as Arc<dyn LanguageSource>,
+        || {},
+    );
 
     // The worker is inside the status call and cannot take anything else.
     asking.ask(Ask::Status(StatusAbout::WhetherServed));
@@ -246,12 +324,19 @@ fn a_question_still_waiting_to_go_out_is_replaced_by_the_one_that_supersedes_it(
 #[test]
 fn a_file_that_was_opened_is_closed_when_the_editor_on_it_goes_away() {
     let source = FakeSource::new();
-    let asking = Asking::new("src/main.rs", Arc::clone(&source) as Arc<dyn LanguageSource>, || {});
+    let asking = Asking::new(
+        "src/main.rs",
+        Arc::clone(&source) as Arc<dyn LanguageSource>,
+        || {},
+    );
     asking.ask(Ask::Send {
         text: "fn one() {}".to_string(),
         opening: true,
     });
-    assert!(matches!(next_answer(&asking), Heard::Told { heard: true, .. }));
+    assert!(matches!(
+        next_answer(&asking),
+        Heard::Told { heard: true, .. }
+    ));
     drop(asking);
     source.waits_to_be_asked("close src/main.rs");
 
@@ -274,7 +359,11 @@ fn a_file_that_was_opened_is_closed_when_the_editor_on_it_goes_away() {
 fn the_text_is_sent_before_any_question_that_is_asked_about_a_place_in_it() {
     let source = FakeSource::new();
     let release = source.holds_the_first_call();
-    let asking = Asking::new("src/main.rs", Arc::clone(&source) as Arc<dyn LanguageSource>, || {});
+    let asking = Asking::new(
+        "src/main.rs",
+        Arc::clone(&source) as Arc<dyn LanguageSource>,
+        || {},
+    );
 
     // Something to hold the worker while the other three pile up behind it.
     asking.ask(Ask::Status(StatusAbout::WhetherServed));
@@ -479,9 +568,11 @@ fn a_frame_at(pointer: egui::Pos2, clicking: bool) -> egui::RawInput {
 /// text until the editor says there is a name under it rather than arithmetic being done on
 /// the layout from out here.
 fn spots_a_name_could_be_at() -> impl Iterator<Item = egui::Pos2> {
-    (0..80)
-        .step_by(4)
-        .flat_map(|y| (0..300).step_by(6).map(move |x| egui::pos2(x as f32, y as f32)))
+    (0..80).step_by(4).flat_map(|y| {
+        (0..300)
+            .step_by(6)
+            .map(move |x| egui::pos2(x as f32, y as f32))
+    })
 }
 
 /// What a modifier-click on the first name of a file comes to, against a source that says
@@ -510,7 +601,9 @@ fn what_a_modifier_click_comes_to(status: LspStatus, places: Vec<LspLocation>) -
         let (pointer, clicking) = match over_a_name {
             Some(at) => (at, !std::mem::replace(&mut clicked, true)),
             None => (
-                spots.next().expect("a name was never found under the pointer"),
+                spots
+                    .next()
+                    .expect("a name was never found under the pointer"),
                 false,
             ),
         };
@@ -530,7 +623,10 @@ fn what_a_modifier_click_comes_to(status: LspStatus, places: Vec<LspLocation>) -
             return answer;
         }
     }
-    panic!("the click was never answered; the source was asked {:?}", source.asked());
+    panic!(
+        "the click was never answered; the source was asked {:?}",
+        source.asked()
+    );
 }
 
 /// The distinction the whole crate exists for, end to end: nothing from a server that has not
@@ -565,6 +661,7 @@ fn nothing_from_a_server_still_reading_the_project_is_the_wait_and_not_an_answer
         vec![LspLocation {
             file_path: "src/lib.rs".to_string(),
             line_number: 12,
+            line_text: None,
         }],
     );
     assert!(
@@ -577,7 +674,9 @@ fn nothing_from_a_server_still_reading_the_project_is_the_wait_and_not_an_answer
 #[test]
 fn a_modifier_click_in_a_file_nothing_serves_says_there_is_no_server() {
     let answer = what_a_modifier_click_comes_to(LspStatus::Unavailable, Vec::new());
-    assert!(matches!(&answer, Definition::NoServer(word) if word.text == "fn" || word.text == "greet"));
+    assert!(
+        matches!(&answer, Definition::NoServer(word) if word.text == "fn" || word.text == "greet")
+    );
 }
 
 /// The document half of a frame, over and over without a window: whatever the file owes its
@@ -598,9 +697,7 @@ fn the_document_is_kept_up_until(
         if let Some(ask) = served.owed(text, Instant::now()).ask {
             asking.ask(match ask {
                 DocumentAsk::WhetherServed => Ask::Status(StatusAbout::WhetherServed),
-                DocumentAsk::WhetherStillStarting => {
-                    Ask::Status(StatusAbout::WhetherStillStarting)
-                }
+                DocumentAsk::WhetherStillStarting => Ask::Status(StatusAbout::WhetherStillStarting),
                 DocumentAsk::Send { text, opening } => Ask::Send { text, opening },
             });
         }
@@ -616,9 +713,7 @@ fn the_document_is_kept_up_until(
                 } => served.starting_answered(status),
                 Heard::Told { text, heard: true } => served.heard(text),
                 Heard::Told { heard: false, .. } => served.could_not_be_told(),
-                Heard::Definition { .. }
-                | Heard::Completion { .. }
-                | Heard::Triggers(_) => {}
+                Heard::Definition { .. } | Heard::Completion { .. } | Heard::Triggers(_) => {}
             }
         }
         std::thread::sleep(Duration::from_millis(5));
@@ -683,7 +778,10 @@ fn a_file_nothing_serves_settles_quietly_and_stops_asking_about_itself() {
     // Frames go by and it owes nothing at all - no text, no question, and not even a frame
     // asked for on its behalf.
     for _ in 0..200 {
-        assert_eq!(served.owed("# notes", Instant::now()), DocumentOwed::default());
+        assert_eq!(
+            served.owed("# notes", Instant::now()),
+            DocumentOwed::default()
+        );
     }
     assert_eq!(source.asked(), ["status notes.md"]);
 }

@@ -11,7 +11,9 @@ use std::{
 };
 
 use anyhow::Result;
-use moon_lsp::{LspCompletion, LspLocation, LspPosition, LspRegistry, LspStatus, Workspace};
+use moon_lsp::{
+    LspCompletion, LspFileEdit, LspLocation, LspPosition, LspRegistry, LspStatus, Workspace,
+};
 
 use crate::source::LanguageSource;
 
@@ -31,7 +33,11 @@ pub struct RegistrySource {
 
 impl RegistrySource {
     /// Servers for the repo at `root`, held in `servers` under `key`.
-    pub fn new(servers: Arc<LspRegistry>, key: impl Into<String>, root: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        servers: Arc<LspRegistry>,
+        key: impl Into<String>,
+        root: impl Into<PathBuf>,
+    ) -> Self {
         Self {
             servers,
             key: key.into(),
@@ -73,8 +79,49 @@ impl LanguageSource for RegistrySource {
         self.servers.did_close(&self.repo(), file_path)
     }
 
-    fn definition(&self, file_path: &str, at: LspPosition) -> Result<Vec<LspLocation>> {
-        self.servers.definition(&self.repo(), file_path, at)
+    fn places(
+        &self,
+        file_path: &str,
+        at: LspPosition,
+        which: moon_lsp::LspPlaces,
+    ) -> Result<Vec<LspLocation>> {
+        self.servers.places(&self.repo(), file_path, at, which)
+    }
+
+    fn format(
+        &self,
+        file_path: &str,
+        options: moon_lsp::LspFormatting,
+    ) -> Result<Vec<moon_lsp::LspTextEdit>> {
+        self.servers.format(&self.repo(), file_path, options)
+    }
+
+    fn hover(&self, file_path: &str, at: LspPosition) -> Result<Option<String>> {
+        self.servers.hover(&self.repo(), file_path, at)
+    }
+
+    fn diagnostics(&self, file_path: &str) -> Result<Vec<moon_lsp::LspDiagnostic>> {
+        Ok(self.servers.diagnostics(&self.repo(), file_path))
+    }
+
+    fn did_save(&self, file_path: &str) -> Result<()> {
+        self.servers.did_save(&self.repo(), file_path)
+    }
+
+    fn code_actions(
+        &self,
+        file_path: &str,
+        at: LspPosition,
+    ) -> Result<Vec<moon_lsp::LspCodeAction>> {
+        self.servers.code_actions(&self.repo(), file_path, at)
+    }
+
+    fn signature_help(
+        &self,
+        file_path: &str,
+        at: LspPosition,
+    ) -> Result<Option<moon_lsp::LspSignature>> {
+        self.servers.signature_help(&self.repo(), file_path, at)
     }
 
     fn completion(&self, file_path: &str, at: LspPosition) -> Result<Vec<LspCompletion>> {
@@ -83,5 +130,13 @@ impl LanguageSource for RegistrySource {
 
     fn trigger_characters(&self, file_path: &str) -> Vec<char> {
         self.servers.trigger_characters(&self.key, file_path)
+    }
+
+    fn prepare_rename(&self, file_path: &str, at: LspPosition) -> Result<Option<String>> {
+        self.servers.prepare_rename(&self.repo(), file_path, at)
+    }
+
+    fn rename(&self, file_path: &str, at: LspPosition, new_name: &str) -> Result<Vec<LspFileEdit>> {
+        self.servers.rename(&self.repo(), file_path, at, new_name)
     }
 }
