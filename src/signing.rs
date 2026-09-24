@@ -10,7 +10,9 @@
 //!
 //! Nothing here calls anything or reads a clock; the caller passes the time in.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use web_time::Instant;
 
 use crate::{CanAnswer, LspPosition, LspSignature};
 

@@ -26,6 +26,9 @@ egui_moon_editor = { version = "0.1", path = "../egui_moon_editor" }
 # The client: processes, framing, position arithmetic, a server per workspace. It knows
 # nothing about editors, and that stays true too.
 moon_lsp = { version = "0.1", path = "../moon_lsp" }
+# The clock the waits are measured on. std's everywhere but a browser, where std's panics and
+# this is the page's own.
+web-time = "1"
 
 [dev-dependencies]
 # The example opens a real window on a real file against a real language server - see

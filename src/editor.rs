@@ -8,9 +8,10 @@
 //! and so that a caller with its own worker threads can ignore this file entirely and use
 //! [`Served`], [`Completing`] and [`asks_about`](crate::asks_about) directly.
 
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
 use egui_moon_editor::{Editor, EditorOutput, EditorRequest, EditorStyle, Language, Word};
+use web_time::Instant;
 
 use crate::{
     asking::{Ask, Asking, Heard, StatusAbout},

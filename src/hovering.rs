@@ -10,9 +10,10 @@
 //! Nothing here calls anything or reads a clock; the caller passes the time in, which is what
 //! lets the waiting be tested without either.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use egui_moon_editor::Word;
+use web_time::Instant;
 
 use crate::CanAnswer;
 

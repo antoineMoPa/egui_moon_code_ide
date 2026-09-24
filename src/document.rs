@@ -15,7 +15,9 @@
 //! is owed this frame and the caller does it however it does such things - on this crate's
 //! own worker thread, or on whatever the application already has.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use web_time::Instant;
 
 use crate::source::LspStatus;
 

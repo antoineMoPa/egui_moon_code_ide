@@ -601,6 +601,7 @@ dependencies = [
  "egui",
  "egui_moon_editor",
  "moon_lsp",
+ "web-time",
 ]
 
 [[package]]

@@ -33,9 +33,8 @@
 //! Every request remembers what it was about and every answer is checked against what is being
 //! typed when it lands.
 
-use std::time::Instant;
-
 use egui_moon_editor::{Completion, EditorOutput, TextPoint};
+use web_time::Instant;
 
 use crate::{
     calling,
